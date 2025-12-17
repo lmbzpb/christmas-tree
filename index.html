@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Dreamy Christmas - Fixed</title>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Mountains+of+Christmas:wght@700&display=swap" rel="stylesheet">
+    <meta property="og:title" content="送你一棵梦幻圣诞树">
+    <meta property="og:description" content="点击切换形态：经典 -> 银河 -> 礼物盒">
+    <meta property="og:image" content="你的预览图地址">
+
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #020205;
+            color: white;
+            font-family: sans-serif;
+            touch-action: none; 
+        }
+        canvas {
+            display: block;
+        }
+        #instructions {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            pointer-events: none;
+            opacity: 0.8;
+            font-size: 14px;
+            color: #FFD700;
+            text-shadow: 0 0 5px #FFD700;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+    <div id="instructions">点击切换<br>Tap: Classic -> Galaxy Tree -> Gift Box</div>
+    <canvas id="canvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        let width, height;
+        let particles = [];
+        let ribbons = []; 
+
+        // 0: 经典树, 1: 银河树, 2: 礼物盒
+        let mode = 0; 
+        let transitionAlpha = 1.0; 
+        
+        let mouseX = 0, mouseY = 0;
+        let targetRotationY = 0, targetRotationX = 0;
+        let currentRotationY = 0, currentRotationX = 0;
+        let isDragging = false;
+        let lastMouseX = 0, lastMouseY = 0;
+        let dragStartTime;
+        let isClick = false;
+
+        const TREE_HEIGHT = 500;
+        const TREE_WIDTH = 280;
+        const TOP_Y = -250; 
+        const BOTTOM_Y = 250; 
+        const FOV = 400;
+        const PARTICLE_COUNT = 3000; 
+
+        class Particle {
+            constructor(index) {
+                this.index = index;
+
+                // --- 定义类型 (Type Definition) ---
+                let rand = Math.random();
+                if (rand > 0.98) { this.type = 'bow'; this.baseSize = 4.5; }
+                else if (rand > 0.94) { this.type = 'bell'; this.baseSize = 5; }
+                else if (rand > 0.8) { this.type = 'gold'; this.baseSize = 2.2; }
+                else { this.type = 'leaf'; this.baseSize = 1.8; }
+
+                // --- 1. 经典树形态坐标 (Classic Coords) ---
+                this.treeY = Math.random() * TREE_HEIGHT - (TREE_HEIGHT/2); 
+                let normalizedH = (this.treeY - TOP_Y) / TREE_HEIGHT; 
+                this.treeRadius = Math.random() * TREE_WIDTH * normalizedH; 
+                this.treeAngle = Math.random() * Math.PI * 2;
+                this.treeX = Math.cos(this.treeAngle) * this.treeRadius;
+                this.treeZ = Math.sin(this.treeAngle) * this.treeRadius;
+
+                // --- 2. 银河树形态 (Galaxy Coords) ---
+                this.isGalaxyBase = false;
+                // 仅普通叶子可做底座
+                if (this.type === 'leaf' && Math.random() < 0.35) {
+                    this.isGalaxyBase = true;
+                    // 螺旋银河
+                    let spiralAngle = Math.random() * Math.PI * 8; 
+                    let spiralDist = Math.pow(Math.random(), 0.5) * 350 + 50; 
+                    this.galaxyX = Math.cos(spiralAngle) * spiralDist;
+                    this.galaxyZ = Math.sin(spiralAngle) * spiralDist;
+                    this.galaxyY = BOTTOM_Y + (Math.random() - 0.5) * 20; 
+                } else {
+                    // 树身复用经典树坐标
+                    this.galaxyX = this.treeX;
+                    this.galaxyY = this.treeY;
+                    this.galaxyZ = this.treeZ;
+                }
+                
+                // 银河颜色
+                let hue = 200 + Math.random() * 80; // Blue-Purple
+                this.galaxyColor = `hsl(${hue}, 80%, 75%)`;
+                if (Math.random() > 0.9) this.galaxyColor = "#ffffff"; 
+
+                // --- 3. 礼物盒形态 (Gift Coords) ---
+                const boxSize = 240;
+                const halfBox = boxSize / 2;
+                this.isGiftBow = false; 
+                this.isGiftRibbon = false; 
+
+                if (this.type === 'bow' || Math.random() > 0.85) {
+                    this.isGiftBow = true;
+                    const bowCenterY = -halfBox - 20;
+                    const bowSize = 100; 
+                    let t = Math.random() * Math.PI * 2;
+                    this.giftX = bowSize * Math.cos(t);
+                    this.giftZ = bowSize * Math.sin(2*t) / 2;
+                    this.giftY = bowCenterY + (Math.random() - 0.5) * 30;
+                    if (Math.random() > 0.6) {
+                         this.giftX = (Math.random() - 0.5) * 40;
+                         this.giftY = bowCenterY - 15 + (Math.random() - 0.5) * 40;
+                         this.giftZ = (Math.random() - 0.5) * 40;
+                    }
+                } else {
+                    const face = Math.floor(Math.random() * 6);
+                    let u = (Math.random() - 0.5) * boxSize;
+                    let v = (Math.random() - 0.5) * boxSize;
+                    if (face === 0) { this.giftX = u; this.giftY = v; this.giftZ = halfBox; }
+                    else if (face === 1) { this.giftX = u; this.giftY = v; this.giftZ = -halfBox; }
+                    else if (face === 2) { this.giftX = halfBox; this.giftY = u; this.giftZ = v; }
+                    else if (face === 3) { this.giftX = -halfBox; this.giftY = u; this.giftZ = v; }
+                    else if (face === 4) { this.giftX = u; this.giftY = halfBox; this.giftZ = v; }
+                    else { this.giftX = u; this.giftY = -halfBox; this.giftZ = v; }
+
+                    const ribbonWidth = 40;
+                    if (Math.abs(this.giftX) < ribbonWidth || Math.abs(this.giftY) < ribbonWidth || Math.abs(this.giftZ) < ribbonWidth) {
+                        this.isGiftRibbon = true;
+                    }
+                }
+
+                // 初始位置
+                this.x = this.treeX; this.y = this.treeY; this.z = this.treeZ;
+                this.speed = Math.random() * 0.02 + 0.005;
+                this.angle = this.treeAngle; 
+
+                // 经典树颜色
+                if (this.type === 'bow') this.classicColor = "#ff0000"; 
+                else if (this.type === 'bell') this.classicColor = "#FFD700";
+                else if (this.type === 'gold') this.classicColor = `hsl(${45 + Math.random()*10}, 100%, 70%)`;
+                else { const g = Math.floor(Math.random() * 120 + 60); this.classicColor = `rgb(0, ${g}, 0)`; }
+            }
+
+            update(time) {
+                let targetX, targetY, targetZ;
+
+                if (mode === 0) { // Classic Tree
+                    this.angle += this.speed;
+                    targetX = Math.cos(this.angle) * this.treeRadius;
+                    targetZ = Math.sin(this.angle) * this.treeRadius;
+                    targetY = this.treeY;
+                    this.currentColor = this.classicColor; 
+                } 
+                else if (mode === 1) { // Galaxy Tree
+                    let flowSpeed = this.speed * 0.5;
+                    let currentAngle = Math.atan2(this.galaxyZ, this.galaxyX);
+                    let r = Math.sqrt(this.galaxyX*this.galaxyX + this.galaxyZ*this.galaxyZ);
+                    if (r < 1) r = 1; // 防止除零
+
+                    let rot = currentAngle + flowSpeed;
+                    
+                    targetX = Math.cos(rot) * r;
+                    targetZ = Math.sin(rot) * r;
+                    targetY = this.galaxyY;
+                    this.galaxyX = targetX; this.galaxyZ = targetZ; 
+
+                    if (!this.isGalaxyBase && (this.type === 'bow' || this.type === 'bell')) {
+                        this.currentColor = this.type === 'bow' ? "#E0FFFF" : "#FFFACD";
+                    } else {
+                        this.currentColor = this.galaxyColor;
+                    }
+                }
+                else if (mode === 2) { // Gift Box
+                    targetX = this.giftX; targetY = this.giftY; targetZ = this.giftZ;
+                    if (this.isGiftBow) this.currentColor = "#ff0000"; 
+                    else if (this.isGiftRibbon) this.currentColor = "#FFD700"; 
+                    else this.currentColor = `rgb(${180 + Math.random()*50}, 0, 0)`; 
+                } 
+
+                const lerp = mode === 0 ? 0.2 : 0.08;
+                this.x += (targetX - this.x) * lerp;
+                this.y += (targetY - this.y) * lerp;
+                this.z += (targetZ - this.z) * lerp;
+            }
+
+            draw(rotX, rotY, time) {
+                let p = rotate3D(this.x, this.y, this.z, rotX, rotY);
+                const scale = FOV / (FOV + p.z);
+                if (scale > 0) {
+                    const screenX = width / 2 + p.x * scale;
+                    const screenY = height / 2 + p.y * scale;
+                    let size = this.baseSize * scale;
+                    ctx.fillStyle = this.currentColor;
+                    
+                    if (mode !== 2 && this.type === 'bow') {
+                         ctx.beginPath(); ctx.ellipse(screenX - size*0.7, screenY, size, size/1.6, Math.PI/5, 0, Math.PI*2); ctx.ellipse(screenX + size*0.7, screenY, size, size/1.6, -Math.PI/5, 0, Math.PI*2); ctx.fill();
+                    } else if (mode !== 2 && this.type === 'bell') {
+                         ctx.beginPath(); ctx.arc(screenX, screenY, size, 0, Math.PI * 2); ctx.fill();
+                         ctx.fillStyle = "white"; ctx.beginPath(); ctx.arc(screenX - size*0.3, screenY - size*0.3, size*0.2, 0, Math.PI*2); ctx.fill();
+                    } else {
+                        if (mode === 1 && this.type === 'leaf') size *= 0.7;
+                        ctx.beginPath(); ctx.arc(screenX, screenY, size, 0, Math.PI * 2); ctx.fill();
+                        if (mode === 1 && this.currentColor === "#ffffff") {
+                            ctx.shadowBlur = 6; ctx.shadowColor = "white"; ctx.fill(); ctx.shadowBlur = 0;
+                        }
+                    }
+                }
+            }
+        }
+
+        class Ribbon {
+            constructor(offset) {
+                this.reset();
+                this.y = BOTTOM_Y + offset;
+                this.trail = []; this.maxTrail = 40; 
+            }
+            reset() {
+                this.y = BOTTOM_Y;
+                this.angle = Math.random() * Math.PI * 2;
+                this.speedY = 1.5 + Math.random() * 0.5; 
+                this.speedA = 0.03; 
+                this.trail = [];
+            }
+            update(rotX, rotY) {
+                if (mode === 2) return; 
+
+                this.y -= this.speedY;
+                this.angle += this.speedA;
+                if (this.y < TOP_Y - 50) this.reset(); 
+                let normalizedH = (this.y - TOP_Y) / TREE_HEIGHT;
+                let r = (TREE_WIDTH * normalizedH) + 25; 
+                let x = Math.cos(this.angle) * r;
+                let z = Math.sin(this.angle) * r;
+                let y = this.y;
+                this.trail.push({x, y, z});
+                if(this.trail.length > this.maxTrail) this.trail.shift();
+            }
+            draw(rotX, rotY) {
+                if (transitionAlpha < 0.01) return;
+                ctx.globalAlpha = transitionAlpha;
+                if(this.trail.length < 2) return;
+                
+                let ribbonColor = (mode === 0) ? `hsl(${40 + Math.random()*15}, 100%, 70%)` : `hsl(${160 + Math.random()*20}, 100%, 80%)`;
+
+                ctx.beginPath();
+                let firstPoint = true; let lastScale = 0;
+                for (let i = 0; i < this.trail.length; i++) {
+                    let p3d = this.trail[i];
+                    let p = rotate3D(p3d.x, p3d.y, p3d.z, rotX, rotY);
+                    const scale = FOV / (FOV + p.z);
+                    if(scale > 0) {
+                        let sx = width / 2 + p.x * scale;
+                        let sy = height / 2 + p.y * scale;
+                        if(firstPoint) { ctx.moveTo(sx, sy); firstPoint = false; } 
+                        else { ctx.lineTo(sx, sy); }
+                        lastScale = scale; 
+                    }
+                }
+                ctx.shadowBlur = 15 * lastScale; ctx.shadowColor = ribbonColor; ctx.strokeStyle = ribbonColor;
+                ctx.lineWidth = 3 * lastScale; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+                ctx.stroke(); ctx.shadowBlur = 0;
+                ctx.globalAlpha = 1.0;
+            }
+        }
+
+        function rotate3D(x, y, z, rotX, rotY) {
+            let x1 = x * Math.cos(rotY) - z * Math.sin(rotY);
+            let z1 = z * Math.cos(rotY) + x * Math.sin(rotY);
+            let y1 = y * Math.cos(rotX) - z1 * Math.sin(rotX);
+            let z2 = z1 * Math.cos(rotX) + y * Math.sin(rotX);
+            return {x: x1, y: y1, z: z2};
+        }
+
+        function init() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+            particles = []; ribbons = [];
+            for (let i = 0; i < PARTICLE_COUNT; i++) particles.push(new Particle(i));
+            for (let i = 0; i < 12; i++) ribbons.push(new Ribbon(i * -50));
+        }
+
+        let time = 0;
+        function animate() {
+            time++;
+            ctx.fillStyle = (mode === 1) ? 'rgba(5, 5, 20, 0.9)' : 'rgba(5, 5, 10, 0.9)';
+            ctx.fillRect(0, 0, width, height);
+            
+            currentRotationY += (targetRotationY - currentRotationY) * 0.05;
+            currentRotationX += (targetRotationX - currentRotationX) * 0.05;
+            if(!isDragging) {
+                targetRotationY += (mode === 1) ? 0.001 : 0.002;
+            }
+
+            if (mode !== 2) transitionAlpha += 0.05; 
+            else transitionAlpha -= 0.05;
+            transitionAlpha = Math.max(0, Math.min(1, transitionAlpha));
+
+            drawStar(currentRotationX, currentRotationY);
+            ribbons.forEach(r => r.update(currentRotationX, currentRotationY));
+            ribbons.forEach(r => r.draw(currentRotationX, currentRotationY));
+            drawBottomText();
+
+            particles.forEach(p => { p.update(time); p.draw(currentRotationX, currentRotationY, time); });
+            requestAnimationFrame(animate);
+        }
+
+        function drawStar(rotX, rotY) {
+             if (transitionAlpha < 0.01) return;
+             ctx.globalAlpha = transitionAlpha;
+            let x = 0, y = TOP_Y, z = 0;
+            let p = rotate3D(x, y, z, rotX, rotY);
+            const scale = FOV / (FOV + p.z);
+            if(scale > 0) {
+                let sx = width/2 + p.x * scale; let sy = height/2 + p.y * scale;
+                ctx.save(); ctx.translate(sx, sy); ctx.scale(scale, scale);
+                let starColor = (mode === 1) ? "#E0FFFF" : "#FFD700";
+                ctx.shadowBlur = 30; ctx.shadowColor = starColor; ctx.fillStyle = starColor;
+                ctx.font = "bold 60px Arial"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+                ctx.fillText("★", 0, 0); ctx.restore();
+            }
+            ctx.globalAlpha = 1.0;
+        }
+
+        function drawBottomText() {
+            ctx.save();
+            ctx.font = "36px 'Mountains of Christmas', cursive";
+            ctx.textAlign = "center";
+            ctx.shadowColor = "#FFD700"; ctx.shadowBlur = 15; ctx.fillStyle = "#ffffff"; 
+            ctx.fillText("Merry Christmas", width / 2, height - 60);
+            ctx.restore();
+        }
+
+        window.addEventListener('resize', () => { init(); });
+        function onStart(x, y) { isDragging = true; dragStartTime = Date.now(); isClick = true; lastMouseX = x; lastMouseY = y; }
+        function onMove(x, y) {
+            if (!isDragging) return;
+            const deltaX = x - lastMouseX; const deltaY = y - lastMouseY;
+            if (Math.abs(deltaX) > 2 || Math.abs(deltaY) > 2) isClick = false;
+            targetRotationY += deltaX * 0.01; targetRotationX += deltaY * 0.01;
+            lastMouseX = x; lastMouseY = y;
+        }
+        function onEnd() {
+            isDragging = false;
+            const dragDuration = Date.now() - dragStartTime;
+            if (isClick && dragDuration < 200) {
+                mode = (mode + 1) % 3;
+                targetRotationY = 0; targetRotationX = 0;
+            }
+        }
+        canvas.addEventListener('mousedown', e => onStart(e.clientX, e.clientY));
+        canvas.addEventListener('touchstart', e => onStart(e.touches[0].clientX, e.touches[0].clientY), {passive: false});
+        window.addEventListener('mousemove', e => onMove(e.clientX, e.clientY));
+        window.addEventListener('touchmove', e => { onMove(e.touches[0].clientX, e.touches[0].clientY); e.preventDefault(); }, {passive: false});
+        window.addEventListener('mouseup', onEnd);
+        window.addEventListener('touchend', onEnd);
+
+        // 立即执行，不等待字体
+        init();
+        animate();
+    </script>
+</body>
+</html>
